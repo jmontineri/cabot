@@ -270,6 +270,8 @@ class InstanceForm(SymmetricalForm):
         return ret
 
 
+
+
 class ServiceForm(forms.ModelForm):
 
     class Meta:
@@ -396,7 +398,6 @@ class CheckCreateView(LoginRequiredMixin, CreateView):
         if self.request.GET.get('instance'):
             return reverse('instance', kwargs={'pk': self.request.GET.get('instance')})
         return reverse('checks')  
-		
 
 
 class CheckUpdateView(LoginRequiredMixin, UpdateView):
@@ -548,21 +549,24 @@ class InstanceCreateView(LoginRequiredMixin, CreateView):
     model = Instance
     form_class = InstanceForm
 
-    def generateDefaultPingCheck(self):
-        pc = ICMPStatusCheck()
-        pc.created_by = self.request.user
-        pc.name = "Default Ping Check"
-        pc.frequency = 5
-        pc.importance = Service.ERROR_STATUS
-        pc.active = True
-        pc.debounce = 0
+    def form_valid(self, form):
+        ret = super(InstanceCreateView, self).form_valid(form)
+        if self.object.status_checks.filter(polymorphic_ctype__model='icmpstatuscheck').count() == 0:
+            self.generate_default_ping_check(self.object)
+        return ret
+
+    def generate_default_ping_check(self, obj):
+        pc = ICMPStatusCheck(
+            name="Default Ping Check for %s" % obj.name,
+            frequency=5,
+            importance=Service.ERROR_STATUS,
+            debounce=0,
+            created_by=None,
+        )
         pc.save()
-        pc.instance_set = [Instance.objects.get(pk=self.object.id)]
-        pc.save()
+        obj.status_checks.add(pc)
 
     def get_success_url(self):
-#Where else can I run things when an instance gets created?
-        self.generateDefaultPingCheck()
         return reverse('instance', kwargs={'pk': self.object.id})
 
     def get_initial(self):

@@ -22,6 +22,8 @@ import os
 import requests
 from celery.utils.log import get_task_logger
 
+RAW_DATA_LIMIT = 5000
+
 logger = get_task_logger(__name__)
 
 CHECK_TYPES = (
@@ -248,7 +250,7 @@ class Service(CheckGroupMixin):
 
 
 class Instance(CheckGroupMixin):
-	
+
 
     class Meta:
         ordering = ['name']
@@ -311,7 +313,7 @@ class StatusCheck(PolymorphicModel):
         null=True,
         help_text='Number of successive failures permitted before check will be marked as failed. Default is 0, i.e. fail on first failure.'
     )
-    created_by = models.ForeignKey(User)
+    created_by = models.ForeignKey(User, default=User.objects.get(is_active=True), null=True) 
     calculated_status = models.CharField(
         max_length=50, choices=Service.STATUSES, default=Service.CALCULATED_PASSING_STATUS, blank=True)
     last_run = models.DateTimeField(null=True)
@@ -386,7 +388,7 @@ class StatusCheck(PolymorphicModel):
         return self.name
 
     def recent_results(self):
-        return self.statuscheckresult_set.all().order_by('-time_complete')[:10]
+        return self.statuscheckresult_set.all().order_by('-time_complete').defer('raw_data')[:10]
 
     def last_result(self):
         try:
@@ -432,9 +434,12 @@ class StatusCheck(PolymorphicModel):
         for service in services:
             update_service.delay(service.id)
 
+        instances = self.instance_set.all()
+        for instance in instances:
+            update_service.delay(instance.id)
+
 class ICMPStatusCheck(StatusCheck):
 
-    
     class Meta(StatusCheck.Meta):
         proxy = True
 
@@ -656,7 +661,7 @@ class StatusCheckResult(models.Model):
     nullable
     """
     check = models.ForeignKey(StatusCheck)
-    time = models.DateTimeField(null=False)
+    time = models.DateTimeField(null=False, db_index=True)
     time_complete = models.DateTimeField(null=True, db_index=True)
     raw_data = models.TextField(null=True)
     succeeded = models.BooleanField(default=False)
@@ -686,6 +691,11 @@ class StatusCheckResult(models.Model):
             return u"%s..." % self.error[:snippet_len - 3]
         else:
             return self.error
+
+    def save(self, *args, **kwargs):
+        if isinstance(self.raw_data, basestring):
+            self.raw_data = self.raw_data[:RAW_DATA_LIMIT]
+        return super(StatusCheckResult, self).save(*args, **kwargs)
 
 
 class UserProfile(models.Model):
